@@ -52,6 +52,6 @@ Writing lyrics to '09 いつも何度でも(千と千尋の神隠し).m4a'
 
 Lyrics added to 10 さんぽ(となりのトトロ).m4a
 
-All files processed successfully!
+All 14 files processed successfully!
 
 ```
