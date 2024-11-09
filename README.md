@@ -1,4 +1,4 @@
-# Uta-Net Lyrics Adder
+# Uta-Net Lyrics Tagger
 
 Downloads and writes lyrics for your audio files from www.uta-net.com
 
