@@ -10,22 +10,20 @@ import mutagen
 from mutagen.id3 import ID3, USLT, ID3NoHeaderError
 import difflib
 import unicodedata
+import argparse
 
 
 class LyricsTagger:
-    def __init__(self):
-        self.directory: str = self.get_directory_path()
+    def __init__(
+        self, directory: Optional[str] = None, artist_url: Optional[str] = None
+    ):
+        self.directory: str = self.get_directory_path(directory)
         self.audio_files: List[str] = self.get_audio_files()
-        self.artist_url: str = self.get_artist_url()
+        self.artist_url: str = self.get_artist_url(artist_url)
         self.song_entries: Dict[str, str] = self.collect_song_entries()
 
-    def get_directory_path(self) -> str:
-        """Prompt the user for a directory path or use current directory."""
-        directory = input(
-            "Please enter the directory path (press Enter for current directory): "
-        ).strip()
-
-        # If no input, use current working directory
+    def get_directory_path(self, directory: Optional[str] = None) -> str:
+        """Get directory path from argument or use current directory."""
         if not directory:
             directory = os.getcwd()
             print(f"Using current directory: {directory}")
@@ -49,22 +47,15 @@ class LyricsTagger:
             sys.exit(1)
         return audio_files
 
-    def get_artist_url(self) -> str:
-        """Get uta-net artist page URL from user input or auto-detect from audio files."""
-        url = input(
-            "Please enter the uta-net.com artist page URL (skip for auto-detect): "
-        ).strip()
-
-        # If URL is provided and valid, use it
+    def get_artist_url(self, url: Optional[str] = None) -> str:
+        """Get uta-net artist page URL from argument or auto-detect from audio files."""
         if url and re.match(r"https?://www\.uta-net\.com/artist/\d+/?", url):
             return url
 
-        # If no valid URL provided, try to auto-detect artist
         if not self.audio_files:
             print("No audio files found in directory.")
             sys.exit(1)
 
-        # Get artist from first audio file
         file_path = os.path.join(self.directory, self.audio_files[0])
         audio = mutagen.File(file_path, easy=True)
         if not audio or not audio.get("artist"):
@@ -74,7 +65,6 @@ class LyricsTagger:
         artist_name = str(audio["artist"][0])
         print(f"Detected artist: {artist_name}")
 
-        # Search for artist on uta-net
         search_url = "https://www.uta-net.com/search/"
         params = {"target": "art", "type": "in", "keyword": artist_name}
 
@@ -83,7 +73,6 @@ class LyricsTagger:
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "html.parser")
 
-            # Find first artist result
             artist_row = soup.select_one("tbody.songlist-table-body tr")
             if not artist_row:
                 print(f"No results found for artist: {artist_name}")
@@ -155,7 +144,6 @@ class LyricsTagger:
 
     def clean_title(self, title: str) -> str:
         """Clean title by removing emojis, symbols, and punctuation"""
-        # Normalize unicode (e.g., full-width to half-width for Latin chars and numbers)
         title = unicodedata.normalize("NFKC", title)
 
         cleaned = ""
@@ -296,9 +284,9 @@ class LyricsTagger:
                 continue
 
             print(f"Writing lyrics to '{filename}'")
-            print("-" * 10)
+            print("-" * 20)
             print(lyrics)
-            print("-" * 10)
+            print("-" * 20)
 
             try:
                 self.write_lyrics_to_file(file_path, lyrics)
@@ -315,11 +303,24 @@ class LyricsTagger:
                 f"\nTotal: {len(failed_files)} file(s) failed out of {len(self.audio_files)}"
             )
         else:
-            print("\nAll files processed successfully!")
+            print(f"\nAll {len(self.audio_files)} files processed successfully!")
 
 
 def main() -> None:
-    tagger = LyricsTagger()
+    parser = argparse.ArgumentParser(
+        description="Add lyrics from uta-net.com to audio files."
+    )
+    parser.add_argument(
+        "-d",
+        "--directory",
+        help="Directory containing audio files (default: current directory)",
+    )
+    parser.add_argument(
+        "-u", "--url", help="uta-net.com artist page URL (default: auto-detect)"
+    )
+
+    args = parser.parse_args()
+    tagger = LyricsTagger(directory=args.directory, artist_url=args.url)
     tagger.process_audio_files()
 
 
