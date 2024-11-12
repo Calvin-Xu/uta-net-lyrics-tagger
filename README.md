@@ -6,15 +6,26 @@ Downloads and writes lyrics for your audio files from www.uta-net.com
 - Enjoy!
 
 ```
-Please enter the directory path (press Enter for current directory):
+$ uta-net.py -h
+usage: uta-net.py [-h] [-d DIRECTORY] [-u URL]
+
+Add lyrics from uta-net.com to audio files.
+
+options:
+  -h, --help            show this help message and exit
+  -d DIRECTORY, --directory DIRECTORY
+                        Directory containing audio files (default: current directory)
+  -u URL, --url URL     uta-net.com artist page URL (default: auto-detect)
+```
+
+```
 Using current directory: ...
-Please enter the uta-net.com artist page URL (skip for auto-detect):
 Detected artist: 井上あずみ
 Found artist: 井上あずみ (歌詞：71)
 Artist URL: https://www.uta-net.com/artist/1864/
 Found substring match: '風の谷のナウシカ(風の谷のナウシカ)' contains '風の谷のナウシカ'
 Writing lyrics to '08 風の谷のナウシカ(風の谷のナウシカ).m4a'
-----------
+--------------------
 金色の花びら散らして
 振り向けば　まばゆい草原
 雲間から光が射せば
@@ -43,7 +54,7 @@ Writing lyrics to '08 風の谷のナウシカ(風の谷のナウシカ).m4a'
 風の谷のナウシカ　眠る樹海を飛び超え
 青空から舞い降りたら
 やさしく抱きしめて
-----------
+--------------------
 Lyrics added to 08 風の谷のナウシカ(風の谷のナウシカ).m4a
 Found substring match: 'いつも何度でも(千と千尋の神隠し)' contains 'いつも何度でも'
 Writing lyrics to '09 いつも何度でも(千と千尋の神隠し).m4a'
