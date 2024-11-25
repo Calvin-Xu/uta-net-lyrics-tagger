@@ -7,7 +7,7 @@ Downloads and writes lyrics for your audio files from www.uta-net.com
 
 ```
 $ uta-net.py -h
-usage: uta-net.py [-h] [-d DIRECTORY] [-u URL] [--per-file]
+usage: uta-net.py [-h] [-d DIRECTORY] [-u URL] [--per-file] [--by-title]
 
 Add lyrics from uta-net.com to audio files.
 
@@ -17,6 +17,7 @@ options:
                         Directory containing audio files (default: current directory)
   -u URL, --url URL     uta-net.com artist page URL (default: auto-detect)
   --per-file            Search for artist URL for each file individually
+  --by-title            Try to find lyrics by title search for failed files
 ```
 
 ```
