@@ -15,12 +15,20 @@ import argparse
 
 class LyricsTagger:
     def __init__(
-        self, directory: Optional[str] = None, artist_url: Optional[str] = None
+        self,
+        directory: Optional[str] = None,
+        artist_url: Optional[str] = None,
+        per_file_search: bool = False,
     ):
         self.directory: str = self.get_directory_path(directory)
         self.audio_files: List[str] = self.get_audio_files()
-        self.artist_url: str = self.get_artist_url(artist_url)
-        self.song_entries: Dict[str, str] = self.collect_song_entries()
+        self.per_file_search = per_file_search
+        self.artist_url: Optional[str] = (
+            None if per_file_search else self.get_artist_url(artist_url)
+        )
+        self.song_entries: Dict[str, str] = (
+            {} if per_file_search else self.collect_song_entries()
+        )
 
     def get_directory_path(self, directory: Optional[str] = None) -> str:
         """Get directory path from argument or use current directory."""
@@ -47,6 +55,99 @@ class LyricsTagger:
             sys.exit(1)
         return audio_files
 
+    @staticmethod
+    def find_best_match(
+        search_term: str, candidates: List[str], threshold: float = 0.8
+    ) -> Optional[tuple[str, float]]:
+        """Find the best matching string from a list of candidates using fuzzy matching.
+
+        Args:
+            search_term: The string to search for
+            candidates: List of strings to search through
+            threshold: Minimum similarity ratio to consider a match (0-1)
+
+        Returns:
+            Tuple of (best matching string, similarity ratio) or None if no match found
+        """
+        best_match = None
+        highest_ratio = 0
+        substring_match = None
+
+        for candidate in candidates:
+            # Calculate similarity ratio
+            ratio = difflib.SequenceMatcher(None, search_term, candidate).ratio()
+
+            if ratio > highest_ratio and ratio >= threshold:
+                highest_ratio = ratio
+                best_match = candidate
+
+            # Check for substring match if we haven't found a good match yet
+            if not best_match and candidate in search_term:
+                # If we find multiple substring matches, use the longest one
+                if not substring_match or len(candidate) > len(substring_match):
+                    substring_match = candidate
+
+        # Use substring match if no better match was found
+        if not best_match and substring_match:
+            substring_ratio = difflib.SequenceMatcher(
+                None, search_term, substring_match
+            ).ratio()
+            return substring_match, substring_ratio
+        elif best_match:
+            return best_match, highest_ratio
+
+        return None
+
+    @staticmethod
+    def search_artist_url(artist_name: str) -> Optional[tuple[str, str, str]]:
+        """Search for an artist on uta-net and return their URL and details."""
+        search_url = "https://www.uta-net.com/search/"
+        params = {"target": "art", "type": "in", "keyword": artist_name}
+
+        try:
+            response = requests.get(search_url, params=params)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, "html.parser")
+
+            artist_entries = []
+            for row in soup.select("tbody.songlist-table-body tr"):
+                artist_link = row.select_one("a")
+                if not artist_link:
+                    continue
+
+                artist_name_found = artist_link.select_one("span.fw-bold").text.strip()
+                song_count = artist_link.select_one("span.song-count").text.strip()
+                artist_entries.append(
+                    (artist_name_found, artist_link["href"], song_count)
+                )
+
+            if not artist_entries:
+                return None
+
+            # Find best matching artist
+            artist_names = [entry[0] for entry in artist_entries]
+            match_result = LyricsTagger.find_best_match(
+                artist_name, artist_names, threshold=0.3
+            )
+
+            if match_result:
+                matched_name, ratio = match_result
+                matched_entry = next(
+                    entry for entry in artist_entries if entry[0] == matched_name
+                )
+                print(f"Best artist match (similarity: {ratio:.2f}): {matched_name}")
+                return (
+                    f"https://www.uta-net.com{matched_entry[1]}",
+                    matched_entry[0],
+                    matched_entry[2],
+                )
+
+            return None
+
+        except Exception as e:
+            print(f"Error searching for artist: {str(e)}")
+            return None
+
     def get_artist_url(self, url: Optional[str] = None) -> str:
         """Get uta-net artist page URL from argument or auto-detect from audio files."""
         if url and re.match(r"https?://www\.uta-net\.com/artist/\d+/?", url):
@@ -65,36 +166,16 @@ class LyricsTagger:
         artist_name = str(audio["artist"][0])
         print(f"Detected artist: {artist_name}")
 
-        search_url = "https://www.uta-net.com/search/"
-        params = {"target": "art", "type": "in", "keyword": artist_name}
-
-        try:
-            response = requests.get(search_url, params=params)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, "html.parser")
-
-            artist_row = soup.select_one("tbody.songlist-table-body tr")
-            if not artist_row:
-                print(f"No results found for artist: {artist_name}")
-                sys.exit(1)
-
-            artist_link = artist_row.select_one("a")
-            if not artist_link:
-                print(f"Could not find artist link for: {artist_name}")
-                sys.exit(1)
-
-            artist_url = f"https://www.uta-net.com{artist_link['href']}"
-            artist_name_found = artist_link.select_one("span.fw-bold").text.strip()
-            song_count = artist_link.select_one("span.song-count").text.strip()
-
-            print(f"Found artist: {artist_name_found} ({song_count})")
-            print(f"Artist URL: {artist_url}")
-
-            return artist_url
-
-        except Exception as e:
-            print(f"Error searching for artist: {str(e)}")
+        result = self.search_artist_url(artist_name)
+        if not result:
+            print(f"No results found for artist: {artist_name}")
             sys.exit(1)
+
+        artist_url, artist_name_found, song_count = result
+        print(f"Found artist: {artist_name_found} ({song_count})")
+        print(f"Artist URL: {artist_url}")
+
+        return artist_url
 
     def get_total_pages(self, soup: BeautifulSoup) -> int:
         """Extract the total number of pages from the artist page."""
@@ -158,43 +239,28 @@ class LyricsTagger:
         self, file_title: str, song_titles: List[str]
     ) -> Optional[str]:
         """Match the audio file's title with the collected song titles using fuzzy matching."""
-        SIMILARITY_THRESHOLD = 0.8  # Adjust this value between 0 and 1
-
         cleaned_file_title = self.clean_title(file_title)
-        best_match = None
-        highest_ratio = 0
-        substring_match = None
+        cleaned_song_titles = [self.clean_title(title) for title in song_titles]
 
-        for song_title in song_titles:
-            cleaned_song_title = self.clean_title(song_title)
+        # Create mapping of cleaned titles to original titles
+        title_mapping = dict(zip(cleaned_song_titles, song_titles))
 
-            # Calculate similarity ratio
-            ratio = difflib.SequenceMatcher(
-                None, cleaned_file_title, cleaned_song_title
-            ).ratio()
+        match_result = self.find_best_match(cleaned_file_title, cleaned_song_titles)
 
-            if ratio > highest_ratio and ratio >= SIMILARITY_THRESHOLD:
-                highest_ratio = ratio
-                best_match = song_title
+        if match_result:
+            matched_clean_title, ratio = match_result
+            original_title = title_mapping[matched_clean_title]
+            if ratio >= 0.9:
+                print(
+                    f"Found substring match: '{file_title}' contains '{original_title}'"
+                )
+            else:
+                print(
+                    f"Matched '{file_title}' to '{original_title}' (similarity: {ratio:.2f})"
+                )
+            return original_title
 
-            # Check for substring match if we haven't found a good match yet
-            if not best_match and cleaned_song_title in cleaned_file_title:
-                # If we find multiple substring matches, use the longest one
-                if not substring_match or len(cleaned_song_title) > len(
-                    self.clean_title(substring_match)
-                ):
-                    substring_match = song_title
-
-        # Use substring match if no better match was found
-        if not best_match and substring_match:
-            best_match = substring_match
-            print(f"Found substring match: '{file_title}' contains '{best_match}'")
-        elif best_match:
-            print(
-                f"Matched '{file_title}' to '{best_match}' (similarity: {highest_ratio:.2f})"
-            )
-
-        return best_match
+        return None
 
     def fetch_lyrics(self, song_url: str) -> str:
         """Fetch the lyrics from the song's page, handling <br> tags correctly."""
@@ -254,6 +320,25 @@ class LyricsTagger:
                 print(f"Could not open {filename}. Skipping.")
                 failed_files.append((filename, "Could not open file"))
                 continue
+
+            # Handle per-file artist search if enabled
+            if self.per_file_search:
+                artist = audio.get("artist")
+                if not artist:
+                    print(f"No artist found for {filename}. Skipping.")
+                    failed_files.append((filename, "No artist found"))
+                    continue
+
+                print(f"\nProcessing {filename} - Artist: {artist[0]}")
+                result = self.search_artist_url(str(artist[0]))
+                if not result:
+                    print(f"No artist found for {artist[0]}. Skipping.")
+                    failed_files.append((filename, f"No artist found for {artist[0]}"))
+                    continue
+
+                self.artist_url, artist_name_found, _ = result
+                print(f"Found artist: {artist_name_found}")
+                self.song_entries = self.collect_song_entries()
 
             title = audio.get("title")
             if not title:
@@ -318,9 +403,16 @@ def main() -> None:
     parser.add_argument(
         "-u", "--url", help="uta-net.com artist page URL (default: auto-detect)"
     )
+    parser.add_argument(
+        "--per-file",
+        action="store_true",
+        help="Search for artist URL for each file individually",
+    )
 
     args = parser.parse_args()
-    tagger = LyricsTagger(directory=args.directory, artist_url=args.url)
+    tagger = LyricsTagger(
+        directory=args.directory, artist_url=args.url, per_file_search=args.per_file
+    )
     tagger.process_audio_files()
 
 
