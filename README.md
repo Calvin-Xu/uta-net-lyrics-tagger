@@ -2,12 +2,12 @@
 
 Downloads and writes lyrics for your audio files from www.uta-net.com
 
-- (Add it to your path and) run it in the directory with your music; assumes all tracks from the directory have the same artist.
+- (Add it to your path and) run it in the directory with your music
 - Enjoy!
 
 ```
 $ uta-net.py -h
-usage: uta-net.py [-h] [-d DIRECTORY] [-u URL]
+usage: uta-net.py [-h] [-d DIRECTORY] [-u URL] [--per-file]
 
 Add lyrics from uta-net.com to audio files.
 
@@ -16,6 +16,7 @@ options:
   -d DIRECTORY, --directory DIRECTORY
                         Directory containing audio files (default: current directory)
   -u URL, --url URL     uta-net.com artist page URL (default: auto-detect)
+  --per-file            Search for artist URL for each file individually
 ```
 
 ```
