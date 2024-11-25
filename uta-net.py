@@ -102,7 +102,11 @@ class LyricsTagger:
     def search_artist_url(artist_name: str) -> Optional[tuple[str, str, str]]:
         """Search for an artist on uta-net and return their URL and details."""
         search_url = "https://www.uta-net.com/search/"
-        params = {"target": "art", "type": "in", "keyword": artist_name}
+        params = {
+            "target": "art",
+            "type": "in",
+            "keyword": LyricsTagger.clean_title(artist_name),
+        }
 
         try:
             response = requests.get(search_url, params=params)
@@ -223,7 +227,8 @@ class LyricsTagger:
 
         return song_entries
 
-    def clean_title(self, title: str) -> str:
+    @staticmethod
+    def clean_title(title: str) -> str:
         """Clean title by removing emojis, symbols, and punctuation"""
         title = unicodedata.normalize("NFKC", title)
 
@@ -239,8 +244,8 @@ class LyricsTagger:
         self, file_title: str, song_titles: List[str]
     ) -> Optional[str]:
         """Match the audio file's title with the collected song titles using fuzzy matching."""
-        cleaned_file_title = self.clean_title(file_title)
-        cleaned_song_titles = [self.clean_title(title) for title in song_titles]
+        cleaned_file_title = LyricsTagger.clean_title(file_title)
+        cleaned_song_titles = [LyricsTagger.clean_title(title) for title in song_titles]
 
         # Create mapping of cleaned titles to original titles
         title_mapping = dict(zip(cleaned_song_titles, song_titles))
@@ -263,7 +268,7 @@ class LyricsTagger:
         return None
 
     def fetch_lyrics(self, song_url: str) -> str:
-        """Fetch the lyrics from the song's page, handling <br> tags correctly."""
+        """Fetch the lyrics from the song's page."""
         response = requests.get(song_url)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, "html.parser")
@@ -309,6 +314,7 @@ class LyricsTagger:
         except Exception as e:
             print(f"Error adding lyrics to {os.path.basename(file_path)}: {str(e)}")
 
+    # largely the logic from collect_song_entries and find_best_match
     def get_lyrics_by_title_search(
         self, filename: str, file_path: str
     ) -> Optional[tuple[bool, str]]:
@@ -323,9 +329,9 @@ class LyricsTagger:
             return None
 
         title = str(audio["title"][0])
-        print(f"\nSearching for '{title}'...")
+        artist = str(audio.get("artist", [""])[0])
+        print(f"\nSearching for '{title}' by '{artist}'...")
 
-        # Use existing collect_song_entries but with a search URL
         search_url = (
             f"https://www.uta-net.com/search/?Keyword={self.clean_title(title)}"
         )
@@ -333,20 +339,78 @@ class LyricsTagger:
         self.artist_url = search_url  # Temporarily use search URL
 
         try:
-            self.song_entries = self.collect_song_entries()
+            # Collect all song entries with their artists
+            # not using a dict because titles are not unique
+            song_entries = []  # List[tuple[str, str, str]]  # (title, url, artist)
+            response = requests.get(search_url)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, "html.parser")
 
-            # Try to find the best match
-            matched_title = self.match_song_title(title, list(self.song_entries.keys()))
-            if not matched_title:
-                return (False, f"No matching song found for '{title}'")
+            total_pages = self.get_total_pages(soup)
 
-            song_url = self.song_entries[matched_title]
+            for page_num in range(1, total_pages + 1):
+                if page_num > 1:
+                    page_url = f"{search_url}&page={page_num}"
+                    response = requests.get(page_url)
+                    response.raise_for_status()
+                    soup = BeautifulSoup(response.content, "html.parser")
+
+                rows = soup.select("tbody.songlist-table-body tr")
+                for row in rows:
+                    title_link = row.select_one("td.sp-w-100 a")
+                    artist_link = row.select_one("td.sp-none a")
+                    if not title_link or not artist_link:
+                        continue
+
+                    song_title = title_link.select_one(
+                        "span.songlist-title"
+                    ).text.strip()
+                    song_artist = artist_link.text.strip()
+                    song_url = f"https://www.uta-net.com{title_link['href']}"
+                    song_entries.append((song_title, song_url, song_artist))
+
+            if not song_entries:
+                return (False, f"No songs found matching '{title}'")
+
+            # First try to find matches with both title and artist
+            best_match = None
+            highest_ratio = 0
+
+            print(f"Found {len(song_entries)} potential matches:")
+            for song_title, song_url, song_artist in song_entries:
+                # Calculate title similarity
+                title_ratio = difflib.SequenceMatcher(
+                    None, self.clean_title(title), self.clean_title(song_title)
+                ).ratio()
+
+                # Calculate artist similarity
+                artist_ratio = difflib.SequenceMatcher(
+                    None, self.clean_title(artist), self.clean_title(song_artist)
+                ).ratio()
+
+                # Weighted combination of title and artist similarity
+                # Artist match is weighted more heavily (0.6 vs 0.4)
+                combined_ratio = (0.4 * title_ratio) + (0.6 * artist_ratio)
+
+                if combined_ratio > highest_ratio:
+                    highest_ratio = combined_ratio
+                    best_match = (song_title, song_url, song_artist)
+
+            if not best_match or highest_ratio < 0.3:  # Minimum threshold for a match
+                return (
+                    False,
+                    f"No confident matches found for '{title}' by '{artist}'",
+                )
+
+            matched_title, song_url, matched_artist = best_match
+            print(
+                f"Best match: '{matched_title}' by '{matched_artist}' (similarity: {highest_ratio:.2f}): {song_url}"
+            )
+
             lyrics = self.fetch_lyrics(song_url)
-
             if not lyrics:
                 return (False, f"No lyrics found for '{matched_title}'")
 
-            print(f"Found lyrics for '{matched_title}'")
             print("-" * 20)
             print(lyrics)
             print("-" * 20)
