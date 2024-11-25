@@ -309,7 +309,58 @@ class LyricsTagger:
         except Exception as e:
             print(f"Error adding lyrics to {os.path.basename(file_path)}: {str(e)}")
 
-    def process_audio_files(self) -> None:
+    def get_lyrics_by_title_search(
+        self, filename: str, file_path: str
+    ) -> Optional[tuple[bool, str]]:
+        """Try to find and fetch lyrics by searching the song title directly.
+
+        Returns:
+            Tuple of (success, reason) where reason is error message if success is False,
+            or None if the file cannot be processed (no title found, etc.)
+        """
+        audio = mutagen.File(file_path, easy=True)
+        if not audio or not audio.get("title"):
+            return None
+
+        title = str(audio["title"][0])
+        print(f"\nSearching for '{title}'...")
+
+        # Use existing collect_song_entries but with a search URL
+        search_url = (
+            f"https://www.uta-net.com/search/?Keyword={self.clean_title(title)}"
+        )
+        original_url = self.artist_url
+        self.artist_url = search_url  # Temporarily use search URL
+
+        try:
+            self.song_entries = self.collect_song_entries()
+
+            # Try to find the best match
+            matched_title = self.match_song_title(title, list(self.song_entries.keys()))
+            if not matched_title:
+                return (False, f"No matching song found for '{title}'")
+
+            song_url = self.song_entries[matched_title]
+            lyrics = self.fetch_lyrics(song_url)
+
+            if not lyrics:
+                return (False, f"No lyrics found for '{matched_title}'")
+
+            print(f"Found lyrics for '{matched_title}'")
+            print("-" * 20)
+            print(lyrics)
+            print("-" * 20)
+
+            self.write_lyrics_to_file(file_path, lyrics)
+            print(f"Successfully added lyrics to {filename} via title search")
+            return (True, "Success")
+
+        except Exception as e:
+            return (False, f"Error in title search: {str(e)}")
+        finally:
+            self.artist_url = original_url  # Restore original artist URL
+
+    def process_audio_files(self, by_title_pass: bool = True) -> None:
         """Process each audio file in the directory to add lyrics."""
         failed_files = []
 
@@ -378,6 +429,23 @@ class LyricsTagger:
             except Exception as e:
                 failed_files.append((filename, f"Error writing lyrics: {str(e)}"))
 
+        # Try to process failed files by title search if enabled
+        if by_title_pass and failed_files:
+            print("\nAttempting to find lyrics by title search for failed files...")
+            still_failed = []
+
+            for filename, reason in failed_files:
+                file_path = os.path.join(self.directory, filename)
+                result = self.get_lyrics_by_title_search(filename, file_path)
+
+                if result is None:
+                    still_failed.append((filename, reason))
+                elif not result[0]:  # If search failed
+                    still_failed.append((filename, result[1]))
+                # If search succeeded, file is not added to still_failed
+
+            failed_files = still_failed
+
         # Print summary at the end
         if failed_files:
             print("\nSummary of files that failed:")
@@ -408,12 +476,17 @@ def main() -> None:
         action="store_true",
         help="Search for artist URL for each file individually",
     )
+    parser.add_argument(
+        "--by-title",
+        action="store_false",
+        help="Try to find lyrics by title search for failed files",
+    )
 
     args = parser.parse_args()
     tagger = LyricsTagger(
         directory=args.directory, artist_url=args.url, per_file_search=args.per_file
     )
-    tagger.process_audio_files()
+    tagger.process_audio_files(by_title_pass=args.by_title)
 
 
 if __name__ == "__main__":
