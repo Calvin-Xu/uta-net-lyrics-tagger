@@ -261,14 +261,9 @@ class LyricsTagger:
         if match_result:
             matched_clean_title, ratio = match_result
             original_title = title_mapping[matched_clean_title]
-            if ratio >= 0.9:
-                print(
-                    f"Found substring match: '{file_title}' contains '{original_title}'"
-                )
-            else:
-                print(
-                    f"Matched '{file_title}' to '{original_title}' (similarity: {ratio:.2f})"
-                )
+            print(
+                f"Matched '{file_title}' to '{original_title}' (similarity: {ratio:.2f})"
+            )
             return original_title
 
         return None
@@ -419,7 +414,7 @@ class LyricsTagger:
             combined_ratio = (0.3 * title_ratio) + (0.7 * artist_ratio)
 
             print(
-                f"  • '{song_title}' by '{song_artist}' (title: {title_ratio:.2f}, artist: {artist_ratio:.2f}, combined: {combined_ratio:.2f})"
+                f"  - '{song_title}' by '{song_artist}' (title: {title_ratio:.2f}, artist: {artist_ratio:.2f}, combined: {combined_ratio:.2f})"
             )
 
             if combined_ratio > highest_ratio:
