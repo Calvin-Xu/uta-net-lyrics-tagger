@@ -11,8 +11,14 @@ from mutagen.id3 import ID3, USLT, ID3NoHeaderError
 import difflib
 import unicodedata
 import argparse
-import argcomplete
 from urllib.parse import quote
+
+try:
+    import argcomplete
+
+    ARGCOMPLETE_AVAILABLE = True
+except ImportError:
+    ARGCOMPLETE_AVAILABLE = False
 
 
 class LyricsTagger:
@@ -116,59 +122,47 @@ class LyricsTagger:
 
         return None
 
-    @staticmethod
-    def search_artist_url(artist_name: str) -> Optional[tuple[str, str, str]]:
+    def search_artist_url(self, artist_name: str) -> Optional[tuple[str, str, str]]:
         """Search for an artist on uta-net and return their URL and details."""
-        search_url = "https://www.uta-net.com/search/"
-        params = {
-            "target": "art",
-            "type": "in",
-            "keyword": LyricsTagger.normalize_text(artist_name),
-        }
+        # Get potential search terms
+        search_terms = self.extract_search_terms(artist_name)
 
-        try:
-            response = requests.get(search_url, params=params)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, "html.parser")
+        best_match = None
+        highest_ratio = 0
 
-            artist_entries = []
-            for row in soup.select("tbody.songlist-table-body tr"):
-                artist_link = row.select_one("a")
-                if not artist_link:
-                    continue
+        # Try each search term until we find a confident match
+        for search_term in search_terms:
+            print(f"Trying artist search term: '{search_term}'")
 
-                artist_name_found = artist_link.select_one("span.fw-bold").text.strip()
-                song_count = artist_link.select_one("span.song-count").text.strip()
-                artist_entries.append(
-                    (artist_name_found, artist_link["href"], song_count)
-                )
+            entries = self.get_artist_search_results(search_term)
+            if not entries:
+                continue
 
-            if not artist_entries:
-                return None
+            artist_names = [entry[0] for entry in entries]
+            entry_mapping = {entry[0]: entry for entry in entries}
 
-            # Find best matching artist
-            artist_names = [entry[0] for entry in artist_entries]
-            match_result = LyricsTagger.find_best_match(
+            match_result = self.find_best_match(
                 artist_name, artist_names, threshold=0.3
             )
 
             if match_result:
                 matched_name, ratio = match_result
-                matched_entry = next(
-                    entry for entry in artist_entries if entry[0] == matched_name
-                )
-                print(f"Best artist match (similarity: {ratio:.2f}): {matched_name}")
-                return (
-                    f"https://www.uta-net.com{matched_entry[1]}",
-                    matched_entry[0],
-                    matched_entry[2],
-                )
+                if ratio > highest_ratio:
+                    highest_ratio = ratio
+                    matched_entry = entry_mapping[matched_name]
+                    best_match = (matched_entry[1], matched_entry[0], matched_entry[2])
 
-            return None
+            if highest_ratio >= 0.3:
+                break
 
-        except Exception as e:
-            print(f"Error searching for artist: {str(e)}")
-            return None
+        if best_match:
+            artist_url, artist_name_found, song_count = best_match
+            print(
+                f"Best artist match (similarity: {highest_ratio:.2f}): {artist_name_found}"
+            )
+            return artist_url, artist_name_found, song_count
+
+        return None
 
     def get_artist_url(self, url: Optional[str] = None) -> Optional[str]:
         """Get uta-net artist page URL from argument or auto-detect from audio files.
@@ -184,7 +178,6 @@ class LyricsTagger:
         audio = mutagen.File(file_path, easy=True)
         if not audio or not audio.get("artist"):
             print(f"Could not read artist from {self.audio_files[0]}")
-            print("Will try searching by title instead.")
             return None
 
         artist_name = str(audio["artist"][0])
@@ -193,7 +186,6 @@ class LyricsTagger:
         result = self.search_artist_url(artist_name)
         if not result:
             print(f"No results found for artist: {artist_name}")
-            print("Will try searching by title instead.")
             return None
 
         artist_url, artist_name_found, song_count = result
@@ -257,7 +249,7 @@ class LyricsTagger:
         for char in title:
             if unicodedata.category(char).startswith(("So", "Sm", "Sk", "Sc")):
                 continue
-            if unicodedata.category(char).startswith("P") and char != "'":
+            if unicodedata.category(char).startswith("P") and char not in "'.:":
                 continue
             cleaned += char
 
@@ -370,7 +362,7 @@ class LyricsTagger:
         except requests.RequestException:
             return None
 
-    def extract_title_search_terms(self, text: str, max_terms: int = 5) -> List[str]:
+    def extract_search_terms(self, text: str, max_terms: int = 5) -> List[str]:
         """Extract multiple potential search terms from text, ordered by likelihood of success."""
         normalized = self.normalize_text(text)
         if not normalized:
@@ -412,7 +404,7 @@ class LyricsTagger:
         print(f"\nSearching for '{title}' by '{artist}'...")
 
         # Get potential search terms
-        search_terms = self.extract_title_search_terms(title)
+        search_terms = self.extract_search_terms(title)
 
         best_match = None
         highest_ratio = 0
@@ -562,9 +554,43 @@ class LyricsTagger:
         else:
             print(f"\nAll {len(self.audio_files)} files processed successfully!")
 
+    def get_artist_search_results(
+        self, search_term: str
+    ) -> Optional[List[tuple[str, str, str]]]:
+        """Perform artist search and return list of (artist_name, url, song_count) tuples."""
+        search_url = "https://www.uta-net.com/search/"
+        params = {
+            "target": "art",
+            "type": "in",
+            "keyword": search_term,
+        }
+
+        try:
+            response = requests.get(search_url, params=params)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, "html.parser")
+
+            artist_entries = []
+            for row in soup.select("tbody.songlist-table-body tr"):
+                artist_link = row.select_one("a")
+                if not artist_link:
+                    continue
+
+                artist_name = artist_link.select_one("span.fw-bold").text.strip()
+                song_count = artist_link.select_one("span.song-count").text.strip()
+                artist_url = f"https://www.uta-net.com{artist_link['href']}"
+                artist_entries.append((artist_name, artist_url, song_count))
+
+            return artist_entries
+        except requests.RequestException:
+            return None
+
 
 def path_completer(prefix, **kwargs):
     """Custom path completer for argcomplete"""
+    if not ARGCOMPLETE_AVAILABLE:
+        return []
+
     audio_extensions = (".mp3", ".flac", ".m4a", ".ogg", ".aac")
     directory = os.getcwd()
     files = []
@@ -602,10 +628,12 @@ def main() -> None:
     parser.add_argument(
         "file",
         nargs="?",
-        help="Process a single audio file (supports tab completion)",
+        help="Process a single audio file (optionally supports tab completion)",
     ).completer = path_completer
 
-    argcomplete.autocomplete(parser)
+    if ARGCOMPLETE_AVAILABLE:
+        argcomplete.autocomplete(parser)
+
     args = parser.parse_args()
 
     tagger = LyricsTagger(
