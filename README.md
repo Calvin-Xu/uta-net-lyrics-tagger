@@ -62,3 +62,5 @@ Successfully added lyrics to 1-07 下川みくに feat. 浦嶋りんこ - 輪舞
 
 All 22 files processed successfully!
 ```
+
+(you may want to consider https://github.com/tranxuanthang/lrcget if you don't use uta-net out of habit)
