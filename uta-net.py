@@ -11,6 +11,7 @@ from mutagen.id3 import ID3, USLT, ID3NoHeaderError
 import difflib
 import unicodedata
 import argparse
+import argcomplete
 from urllib.parse import quote
 
 
@@ -20,8 +21,10 @@ class LyricsTagger:
         directory: Optional[str] = None,
         artist_url: Optional[str] = None,
         per_file_search: bool = False,
+        single_file: Optional[str] = None,
     ):
         self.directory: str = self.get_directory_path(directory)
+        self.single_file: Optional[str] = single_file
         self.audio_files: List[str] = self.get_audio_files()
         self.per_file_search = per_file_search
         self.artist_url: Optional[str] = (
@@ -48,6 +51,18 @@ class LyricsTagger:
     def get_audio_files(self) -> List[str]:
         """Get the list of audio files in the directory."""
         audio_extensions = (".mp3", ".flac", ".m4a", ".ogg", ".aac")
+
+        if self.single_file:
+            if not os.path.isfile(os.path.join(self.directory, self.single_file)):
+                print(f"The specified file '{self.single_file}' does not exist.")
+                sys.exit(1)
+            if not self.single_file.lower().endswith(audio_extensions):
+                print(
+                    f"The specified file '{self.single_file}' is not a supported audio file."
+                )
+                sys.exit(1)
+            return [self.single_file]
+
         audio_files = [
             f
             for f in os.listdir(self.directory)
@@ -108,7 +123,7 @@ class LyricsTagger:
         params = {
             "target": "art",
             "type": "in",
-            "keyword": LyricsTagger.clean_title(artist_name),
+            "keyword": LyricsTagger.normalize_text(artist_name),
         }
 
         try:
@@ -234,13 +249,15 @@ class LyricsTagger:
         return song_entries
 
     @staticmethod
-    def clean_title(title: str) -> str:
+    def normalize_text(title: str) -> str:
         """Clean title by removing emojis, symbols, and punctuation"""
         title = unicodedata.normalize("NFKC", title)
 
         cleaned = ""
         for char in title:
-            if unicodedata.category(char).startswith(("So", "Sm", "Sk", "Sc", "P")):
+            if unicodedata.category(char).startswith(("So", "Sm", "Sk", "Sc")):
+                continue
+            if unicodedata.category(char).startswith("P") and char != "'":
                 continue
             cleaned += char
 
@@ -250,8 +267,8 @@ class LyricsTagger:
         self, file_title: str, song_titles: List[str]
     ) -> Optional[str]:
         """Match the audio file's title with the collected song titles using fuzzy matching."""
-        cleaned_file_title = LyricsTagger.clean_title(file_title)
-        cleaned_song_titles = [LyricsTagger.clean_title(title) for title in song_titles]
+        cleaned_file_title = self.normalize_text(file_title)
+        cleaned_song_titles = [self.normalize_text(title) for title in song_titles]
 
         # Create mapping of cleaned titles to original titles
         title_mapping = dict(zip(cleaned_song_titles, song_titles))
@@ -315,28 +332,17 @@ class LyricsTagger:
         except Exception as e:
             print(f"Error adding lyrics to {os.path.basename(file_path)}: {str(e)}")
 
-    # largely the logic from collect_song_entries and find_best_match
-    def get_lyrics_by_title_search(
-        self, filename: str, file_path: str
-    ) -> Optional[tuple[bool, str]]:
-        """Try to find and fetch lyrics by searching the song title directly."""
-        audio = mutagen.File(file_path, easy=True)
-        if not audio or not audio.get("title"):
-            return None
-
-        title = str(audio["title"][0])
-        artist = str(audio.get("artist", [""])[0])
-        print(f"\nSearching for '{title}' by '{artist}'...")
-
-        def perform_search(search_term: str) -> List[tuple[str, str, str]]:
-            """Helper function to perform the search and collect results."""
-            search_url = f"https://www.uta-net.com/search/?Keyword={quote(search_term)}&Aselect=2&Bselect=3"
-            song_entries = []  # List[tuple[str, str, str]]  # (title, url, artist)
-
+    def get_title_search_results(
+        self, search_term: str
+    ) -> Optional[List[tuple[str, str, str]]]:
+        """Perform search and return list of (title, url, artist) tuples."""
+        search_url = f"https://www.uta-net.com/search/?Keyword={quote(search_term)}&Aselect=2&Bselect=3"
+        try:
             response = requests.get(search_url)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "html.parser")
 
+            song_entries = []
             total_pages = self.get_total_pages(soup)
 
             for page_num in range(1, total_pages + 1):
@@ -361,72 +367,89 @@ class LyricsTagger:
                     song_entries.append((song_title, song_url, song_artist))
 
             return song_entries
+        except requests.RequestException:
+            return None
 
-        try:
-            # Try initial search with full title
-            song_entries = perform_search(self.clean_title(title))
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                # Attempt secondary search with first kanji substring
-                kanji_substring = self.extract_first_kanji_substring(
-                    self.clean_title(title)
-                )
-                if kanji_substring:
-                    print(
-                        f"Initial search failed, trying with kanji substring: {kanji_substring}"
-                    )
-                    try:
-                        song_entries = perform_search(kanji_substring)
-                        if not song_entries:
-                            return (
-                                False,
-                                f"No songs found for '{title}' or '{kanji_substring}'",
-                            )
-                    except Exception as e:
-                        return (False, f"Error in secondary search: {str(e)}")
-                else:
-                    return (False, f"No kanji substring found for '{title}'")
-            else:
-                return (False, f"HTTP error during search: {str(e)}")
-        except Exception as e:
-            return (False, f"Error in title search: {str(e)}")
+    def extract_title_search_terms(self, text: str, max_terms: int = 5) -> List[str]:
+        """Extract multiple potential search terms from text, ordered by likelihood of success."""
+        normalized = self.normalize_text(text)
+        if not normalized:
+            return [text.strip()[:10]]
 
-        if not song_entries:
-            return (False, f"No songs found matching '{title}'")
+        search_terms = []
 
-        # Find best match with both title and artist
+        # First try: full normalized text
+        search_terms.append(normalized)
+
+        # Second try: kanji sequences
+        kanji_matches = list(re.finditer(r"[\u4e00-\u9fff]+", normalized))
+        kanji_terms = sorted(
+            [match.group() for match in kanji_matches], key=len, reverse=True
+        )
+        search_terms.extend(kanji_terms)
+
+        # Third try: word-based substrings
+        words = normalized.split()
+        for i in range(len(words)):
+            for j in range(i + 1, len(words) + 1):
+                substring = " ".join(words[i:j])
+                if substring not in search_terms:
+                    search_terms.append(substring)
+
+        # Return unique terms, limited to max_terms
+        return list(dict.fromkeys(search_terms))[:max_terms]
+
+    def get_lyrics_by_title_search(
+        self, filename: str, file_path: str
+    ) -> Optional[tuple[bool, str]]:
+        """Try to find and fetch lyrics by searching the song title directly."""
+        audio = mutagen.File(file_path, easy=True)
+        if not audio or not audio.get("title"):
+            return None
+
+        title = str(audio["title"][0])
+        artist = str(audio.get("artist", [""])[0])
+        print(f"\nSearching for '{title}' by '{artist}'...")
+
+        # Get potential search terms
+        search_terms = self.extract_title_search_terms(title)
+
         best_match = None
         highest_ratio = 0
 
-        print(f"Found {len(song_entries)} potential matches:")
-        for song_title, song_url, song_artist in song_entries:
-            # Calculate title similarity
-            title_ratio = difflib.SequenceMatcher(
-                None, self.clean_title(title), self.clean_title(song_title)
-            ).ratio()
+        # Try each search term until we find a confident match
+        for search_term in search_terms:
+            print(f"Trying search term: '{search_term}'")
 
-            # Calculate artist similarity
-            artist_ratio = difflib.SequenceMatcher(
-                None, self.clean_title(artist), self.clean_title(song_artist)
-            ).ratio()
+            entries = self.get_title_search_results(search_term)
+            if not entries:
+                continue
 
-            # Weighted combination of title and artist similarity
-            combined_ratio = (0.3 * title_ratio) + (0.7 * artist_ratio)
+            # Find best match among results
+            for song_title, song_url, song_artist in entries:
+                title_ratio = difflib.SequenceMatcher(
+                    None, self.normalize_text(title), self.normalize_text(song_title)
+                ).ratio()
+                artist_ratio = difflib.SequenceMatcher(
+                    None, self.normalize_text(artist), self.normalize_text(song_artist)
+                ).ratio()
 
-            print(
-                f"  - '{song_title}' by '{song_artist}' (title: {title_ratio:.2f}, artist: {artist_ratio:.2f}, combined: {combined_ratio:.2f})"
-            )
+                combined_ratio = (0.3 * title_ratio) + (0.7 * artist_ratio)
+                # print(f" - '{song_title}' by '{song_artist}': {combined_ratio:.2f}")
 
-            if combined_ratio > highest_ratio:
-                highest_ratio = combined_ratio
-                best_match = (song_title, song_url, song_artist)
+                if combined_ratio > highest_ratio:
+                    highest_ratio = combined_ratio
+                    best_match = (song_title, song_url, song_artist)
+            # If we found a confident match, stop searching
+            if highest_ratio >= 0.3:
+                break
 
-        if not best_match or highest_ratio < 0.4:
+        if not best_match or highest_ratio < 0.3:
             return (False, f"No confident matches found for '{title}' by '{artist}'")
 
         matched_title, song_url, matched_artist = best_match
         print(
-            f"Best match: '{matched_title}' by '{matched_artist}' (similarity: {highest_ratio:.2f})"
+            f"\nBest match: '{matched_title}' by '{matched_artist}' (similarity: {highest_ratio:.2f})"
         )
 
         lyrics = self.fetch_lyrics(song_url)
@@ -440,14 +463,6 @@ class LyricsTagger:
         self.write_lyrics_to_file(file_path, lyrics)
         print(f"Successfully added lyrics to {filename} via title search")
         return (True, "Success")
-
-        # ... rest of the function to find best match and fetch lyrics ...
-
-    def extract_first_kanji_substring(self, text: str) -> Optional[str]:
-        """Extract the first contiguous substring of kanji characters from the text."""
-        kanji_pattern = re.compile(r"[\u4e00-\u9fff]+")
-        match = kanji_pattern.search(text)
-        return match.group(0) if match else None
 
     def process_audio_files(self, search_by_title_pass: bool = True) -> None:
         """Process each audio file in the directory to add lyrics."""
@@ -548,6 +563,20 @@ class LyricsTagger:
             print(f"\nAll {len(self.audio_files)} files processed successfully!")
 
 
+def path_completer(prefix, **kwargs):
+    """Custom path completer for argcomplete"""
+    audio_extensions = (".mp3", ".flac", ".m4a", ".ogg", ".aac")
+    directory = os.getcwd()
+    files = []
+
+    for f in os.listdir(directory):
+        if os.path.isfile(f) and f.lower().endswith(audio_extensions):
+            if not prefix or f.startswith(prefix):
+                files.append(f)
+
+    return sorted(files)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Add lyrics from uta-net.com to audio files."
@@ -570,10 +599,20 @@ def main() -> None:
         action="store_true",
         help="Disable searching by title for failed files",
     )
+    parser.add_argument(
+        "file",
+        nargs="?",
+        help="Process a single audio file (supports tab completion)",
+    ).completer = path_completer
 
+    argcomplete.autocomplete(parser)
     args = parser.parse_args()
+
     tagger = LyricsTagger(
-        directory=args.directory, artist_url=args.url, per_file_search=args.per_file
+        directory=args.directory,
+        artist_url=args.url,
+        per_file_search=args.per_file,
+        single_file=args.file,
     )
     tagger.process_audio_files(search_by_title_pass=not args.no_title_search)
 
