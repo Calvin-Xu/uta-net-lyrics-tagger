@@ -7,9 +7,12 @@ Downloads and writes lyrics for your audio files from www.uta-net.com
 
 ```
 $ uta-net.py -h
-usage: uta-net.py [-h] [-d DIRECTORY] [-u URL] [--per-file] [--no-title-search]
+usage: uta-net.py [-h] [-d DIRECTORY] [-u URL] [--per-file] [--no-title-search] [file]
 
 Add lyrics from uta-net.com to audio files.
+
+positional arguments:
+  file                  Process a single audio file (optionally supports tab completion)
 
 options:
   -h, --help            show this help message and exit
@@ -44,7 +47,9 @@ No matching song found for '輪舞－revolution－'.
 Attempting to find lyrics by title search for failed files...
 
 Searching for '輪舞－revolution－' by '下川みくに feat. 浦嶋りんこ'...
-Initial search failed, trying with kanji substring: 輪舞
+Trying search term: '輪舞revolution'
+Trying search term: '輪舞'
+
 Best match: '輪舞～revolution～ Feat.浦嶋りんこ' by '下川みくに' (similarity: 0.55)
 --------------------
 潔く　カッコ良く　生きて行こう…
