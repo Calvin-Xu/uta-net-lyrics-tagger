@@ -69,11 +69,13 @@ class LyricsTagger:
                 sys.exit(1)
             return [self.single_file]
 
-        audio_files = [
-            f
-            for f in os.listdir(self.directory)
-            if f.lower().endswith(audio_extensions)
-        ]
+        audio_files = sorted(
+            [
+                f
+                for f in os.listdir(self.directory)
+                if f.lower().endswith(audio_extensions)
+            ]
+        )
         if not audio_files:
             print("No audio files found in directory.")
             sys.exit(1)
@@ -158,7 +160,7 @@ class LyricsTagger:
         if best_match:
             artist_url, artist_name_found, song_count = best_match
             print(
-                f"Best artist match (similarity: {highest_ratio:.2f}): {artist_name_found}"
+                f"Best artist match (similarity: {highest_ratio:.2f}): {artist_name_found} ({song_count})"
             )
             return artist_url, artist_name_found, song_count
 
@@ -189,7 +191,6 @@ class LyricsTagger:
             return None
 
         artist_url, artist_name_found, song_count = result
-        print(f"Found artist: {artist_name_found} ({song_count})")
         print(f"Artist URL: {artist_url}")
 
         return artist_url
@@ -249,7 +250,7 @@ class LyricsTagger:
         for char in title:
             if unicodedata.category(char).startswith(("So", "Sm", "Sk", "Sc")):
                 continue
-            if unicodedata.category(char).startswith("P") and char not in "'.:":
+            if unicodedata.category(char).startswith("P") and char not in "'.:()（）":
                 continue
             cleaned += char
 
@@ -312,13 +313,22 @@ class LyricsTagger:
                 )
                 tags.add(ulyrics)
                 tags.save(file_path)
-            else:
+            elif file_ext == ".flac":
+                from mutagen.flac import FLAC
+
+                audio = FLAC(file_path)
+                audio["UNSYNCEDLYRICS"] = lyrics
+                audio.save(file_path)
+            elif file_ext == ".m4a" or file_ext == ".aac":
                 # Handle M4A, ALAC, AAC (MP4 containers)
                 from mutagen.mp4 import MP4
 
                 audio = MP4(file_path)
                 audio["\xa9lyr"] = lyrics
                 audio.save(file_path)
+            else:
+                print(f"Unsupported file extension: {file_ext}")
+                return
 
             print(f"Lyrics added to {os.path.basename(file_path)}")
         except Exception as e:
@@ -364,29 +374,34 @@ class LyricsTagger:
 
     def extract_search_terms(self, text: str, max_terms: int = 5) -> List[str]:
         """Extract multiple potential search terms from text, ordered by likelihood of success."""
+        # First try: original text
+        search_terms = [text]
+
+        # Second try: full normalized text
         normalized = self.normalize_text(text)
         if not normalized:
             return [text.strip()[:10]]
-
-        search_terms = []
-
-        # First try: full normalized text
         search_terms.append(normalized)
 
-        # Second try: kanji sequences
+        # Third try: kanji sequences
         kanji_matches = list(re.finditer(r"[\u4e00-\u9fff]+", normalized))
         kanji_terms = sorted(
             [match.group() for match in kanji_matches], key=len, reverse=True
         )
         search_terms.extend(kanji_terms)
 
-        # Third try: word-based substrings
+        # Fourth try: word-based substrings
         words = normalized.split()
+        substrings = []
         for i in range(len(words)):
             for j in range(i + 1, len(words) + 1):
                 substring = " ".join(words[i:j])
                 if substring not in search_terms:
-                    search_terms.append(substring)
+                    substrings.append(substring)
+
+        # Sort substrings by length in descending order
+        substrings.sort(key=len, reverse=True)
+        search_terms.extend(substrings)
 
         # Return unique terms, limited to max_terms
         return list(dict.fromkeys(search_terms))[:max_terms]
@@ -483,8 +498,8 @@ class LyricsTagger:
                     failed_files.append((filename, f"No artist found for {artist[0]}"))
                     continue
 
-                self.artist_url, artist_name_found, _ = result
-                print(f"Found artist: {artist_name_found}")
+                self.artist_url, artist_name_found, song_count = result
+                print(f"Found artist: {artist_name_found} ({song_count})")
                 self.song_entries = self.collect_song_entries()
 
             title = audio.get("title")
